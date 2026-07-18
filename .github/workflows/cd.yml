@@ -1,0 +1,83 @@
+name: cd
+
+on:
+  pull_request:
+    types:
+      - closed
+    branches:
+      - main-stable
+
+jobs:
+  deploy:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: deploy over ssh
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_SSH_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            if [ ! -d "${{ secrets.PROXY_CONF_D_PATH }}" ]; then
+              echo "deploy: ERROR, ${{ secrets.PROXY_CONF_D_PATH }} does not exist, provision the reverse proxy before deploying this service"
+              exit 1
+            fi
+
+            DEPLOY_PATH="${{ secrets.CORE_BE_DEPLOY_PATH }}"
+            if [ ! -d "$DEPLOY_PATH/.git" ]; then
+              echo "deploy: $DEPLOY_PATH does not exist, cloning"
+              git clone git@github.com:prothegee/vsngrp-assignment-core_be.git "$DEPLOY_PATH"
+            fi
+
+            cd "$DEPLOY_PATH"
+            git fetch origin main-stable
+            git checkout main-stable
+            git reset --hard origin/main-stable
+
+            CONFIG_PATH="${{ secrets.CORE_BE_CONFIG_PATH }}"
+            if [ ! -f "$CONFIG_PATH" ]; then
+              echo "deploy: $CONFIG_PATH does not exist, creating from config/config.json.template"
+              mkdir -p "$(dirname "$CONFIG_PATH")"
+              cp config/config.json.template "$CONFIG_PATH"
+
+              sed -i "s|\"jwtSecret\": \"CHANGE_THIS\"|\"jwtSecret\": \"${{ secrets.CORE_BE_SED_CONFIG_JWT_SECRET }}\"|" "$CONFIG_PATH"
+              sed -i "0,/\"connectionString\": \"CHANGE_THIS\"/{s|\"connectionString\": \"CHANGE_THIS\"|\"connectionString\": \"${{ secrets.CORE_BE_SED_CONFIG_PG_WRITE }}\"|}" "$CONFIG_PATH"
+              sed -i "0,/\"connectionString\": \"CHANGE_THIS\"/{s|\"connectionString\": \"CHANGE_THIS\"|\"connectionString\": \"${{ secrets.CORE_BE_SED_CONFIG_PG_READ }}\"|}" "$CONFIG_PATH"
+              sed -i "0,/\"connectionString\": \"CHANGE_THIS\"/{s|\"connectionString\": \"CHANGE_THIS\"|\"connectionString\": \"${{ secrets.CORE_BE_SED_CONFIG_RD }}\"|}" "$CONFIG_PATH"
+              sed -i "s|\"corsAllowedOrigins\": \[.*\]|\"corsAllowedOrigins\": ${{ secrets.CORE_BE_SED_ALLOWED_ORIGINS }}|" "$CONFIG_PATH"
+            fi
+
+            CORS_ORIGINS=$(grep -o '"corsAllowedOrigins"[^]]*\]' "$CONFIG_PATH")
+            if ! echo "$CORS_ORIGINS" | grep -q "https://vsngrp-fec.prothegee.dev"; then
+              echo "deploy: ERROR, corsAllowedOrigins in $CONFIG_PATH does not include https://vsngrp-fec.prothegee.dev, refusing to deploy"
+              exit 1
+            fi
+
+            docker build --build-arg GIT_SHA=$(git rev-parse --short HEAD) -t vsngrp-core-be:latest .
+            docker stop vsngrp-core-be-app || true
+            docker rm vsngrp-core-be-app || true
+            docker run -d --name vsngrp-core-be-app \
+              --network vsngrp-core-be_default \
+              -p 127.0.0.1:9001:9001 \
+              -v "$CONFIG_PATH":/app/config/config.json:ro \
+              --restart unless-stopped \
+              vsngrp-core-be:latest
+
+            cp nginx/vsngrp-bec.conf "${{ secrets.PROXY_CONF_D_PATH }}/vsngrp-bec.conf"
+            docker exec vsngrp-reverse-proxy nginx -s reload
+
+      - name: verify deploy
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_SSH_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd ${{ secrets.CORE_BE_DEPLOY_PATH }}
+            ./verify-deploy.sh
