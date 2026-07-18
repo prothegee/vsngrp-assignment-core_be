@@ -4,6 +4,7 @@ services:
   postgres-primary:
     image: postgres:18
     container_name: vsngrp-core-be-postgres-primary
+    restart: unless-stopped
     environment:
       PGDATA: /var/lib/postgresql/data/pgdata
       POSTGRES_USER: core_be
@@ -30,6 +31,7 @@ services:
   postgres-replica:
     build: ./postgres-replica
     container_name: vsngrp-core-be-postgres-replica
+    restart: unless-stopped
     environment:
       PGDATA: /var/lib/postgresql/data/pgdata
       PRIMARY_HOST: postgres-primary
@@ -45,6 +47,7 @@ services:
   redis:
     image: redis:8
     container_name: vsngrp-core-be-redis
+    restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - ./redis/data:/data

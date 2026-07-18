@@ -59,9 +59,6 @@ config/config.json
 containers/postgres-primary/data/*
 containers/postgres-replica/data/*
 containers/redis/data/*
-!containers/postgres-primary/data/.gitkeep
-!containers/postgres-replica/data/.gitkeep
-!containers/redis/data/.gitkeep
 
 ##
 ## file: exclude
