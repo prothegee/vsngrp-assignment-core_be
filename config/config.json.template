@@ -1,0 +1,17 @@
+{
+  "port": 9001,
+  "version": "0.1.0",
+  "jwtSecret": "CHANGE_THIS",
+  "postgres": {
+    "write": {
+      "connectionString": "CHANGE_THIS"
+    },
+    "read": {
+      "connectionString": "CHANGE_THIS"
+    }
+  },
+  "redis": {
+    "connectionString": "CHANGE_THIS"
+  },
+  "corsAllowedOrigins": ["http://localhost:9003"]
+}

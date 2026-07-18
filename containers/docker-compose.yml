@@ -1,0 +1,52 @@
+name: vsngrp-core-be
+
+services:
+  postgres-primary:
+    image: postgres:18
+    container_name: vsngrp-core-be-postgres-primary
+    environment:
+      PGDATA: /var/lib/postgresql/data/pgdata
+      POSTGRES_USER: core_be
+      POSTGRES_PASSWORD: devpassword
+      POSTGRES_DB: vsngrp_core_be
+      POSTGRES_REPLICATION_USER: replicator
+      POSTGRES_REPLICATION_PASSWORD: devreplicationpassword
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=replica"
+      - "-c"
+      - "max_wal_senders=10"
+      - "-c"
+      - "max_replication_slots=10"
+      - "-c"
+      - "hot_standby=on"
+    volumes:
+      - ./postgres-primary/data:/var/lib/postgresql/data
+      - ./postgres-primary/init:/docker-entrypoint-initdb.d
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  postgres-replica:
+    build: ./postgres-replica
+    container_name: vsngrp-core-be-postgres-replica
+    environment:
+      PGDATA: /var/lib/postgresql/data/pgdata
+      PRIMARY_HOST: postgres-primary
+      POSTGRES_REPLICATION_USER: replicator
+      POSTGRES_REPLICATION_PASSWORD: devreplicationpassword
+    volumes:
+      - ./postgres-replica/data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5433:5432"
+    depends_on:
+      - postgres-primary
+
+  redis:
+    image: redis:8
+    container_name: vsngrp-core-be-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - ./redis/data:/data
+    ports:
+      - "127.0.0.1:6379:6379"
