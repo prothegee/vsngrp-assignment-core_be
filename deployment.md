@@ -28,12 +28,7 @@ The EC2 security group only opens `22` (SSH), `80`, and `443`. Everything else, 
 
 1. Clone this repository to the server, on the `main-stable` branch.
 2. No manual `config.json` step needed, `cd.yml` creates it from `config/config.json.template` on the first deploy and seeds it from the `CORE_BE_SED_*` secrets below (see GitHub Actions secrets and Deploy flow).
-3. Provision the datastores once:
-   ```
-   chmod 777 containers/postgres-primary/data containers/postgres-replica/data containers/redis/data
-   docker compose -f containers/docker-compose.yml up -d
-   ```
-   These containers are not touched by routine deploys, only by this one-time step (and by manual maintenance later).
+3. No manual datastore step needed either, `cd.yml` runs `./containers.sh up` on every deploy, which brings up Postgres primary, Postgres replica, and Redis if they are not already running, and fails the deploy immediately if any of them do not stay running afterward.
 4. Apply migrations against the primary.
 5. Confirm the shared reverse proxy (`vsngrp-reverse-proxy`) is already up and its certificate for `vsngrp-bec.prothegee.dev` already issued, this is separate, shared infra provisioned once, see `tasks.md` Deployment infrastructure, not a per-service step. From here on, this service's own server block (`nginx/vsngrp-bec.conf`, committed in this repo) deploys into it automatically on every `cd.yml` run, no manual nginx or certbot step needed per service.
 
@@ -52,12 +47,12 @@ The EC2 security group only opens `22` (SSH), `80`, and `443`. Everything else, 
 | `CORE_BE_CONFIG_PATH` | absolute path to the real `config.json` on the instance, mounted read-only into the container |
 | `PROXY_CONF_D_PATH` | absolute path to the shared reverse proxy's `conf.d` folder on the instance, this service's own `nginx/vsngrp-bec.conf` is copied there on every deploy |
 | `CORE_BE_SED_CONFIG_JWT_SECRET` | the shared HS256 secret, must match the value used for Core BE WS |
-| `CORE_BE_SED_CONFIG_PG_WRITE` | the primary Postgres connection string |
-| `CORE_BE_SED_CONFIG_PG_READ` | the replica Postgres connection string |
-| `CORE_BE_SED_CONFIG_RD` | the Redis connection string |
+| `CORE_BE_SED_CONFIG_PG_WRITE` | the primary Postgres connection string, host must be `vsngrp-core-be-postgres-primary`, port `5432` |
+| `CORE_BE_SED_CONFIG_PG_READ` | the replica Postgres connection string, host must be `vsngrp-core-be-postgres-replica`, port `5432` (not `5433`, that is only the host-external port mapping, containers reach each other on Postgres's real internal port), password must be identical to `CORE_BE_SED_CONFIG_PG_WRITE`'s, Postgres streaming replication mirrors the primary's users and passwords, the replica cannot have a different one |
+| `CORE_BE_SED_CONFIG_RD` | the Redis connection string, `vsngrp-core-be-redis:6379,password=...`, requires a password in production (see ADR 019) |
 | `CORE_BE_SED_ALLOWED_ORIGINS` | the `corsAllowedOrigins` JSON array, `["https://vsngrp-fec.prothegee.dev"]` in prod |
 
-The `CORE_BE_SED_*` secrets are read whenever `CORE_BE_CONFIG_PATH` does not exist yet, or its contents are not valid JSON, and `cd.yml` (re)creates the file from the template in either case. If the file is still not valid JSON after reseeding, the secrets themselves contain invalid JSON syntax, `cd.yml` fails the deploy immediately rather than mounting a broken config into the container. To rotate a value later (a leaked key, a changed database password), edit `config.json` directly on the instance, or delete it and let the next deploy recreate and reseed it from the current secrets.
+The host in every Postgres/Redis connection string must be the container name from `containers/docker-compose.yml`, not `127.0.0.1`, the app container runs on its own Docker network, not host networking, so `127.0.0.1` inside it means itself. `config.json` is regenerated from `config/config.json.template` and the `CORE_BE_SED_*` secrets on every single deploy, not just the first one, it is a fully derived file, never hand-edited on the instance. If it is still not valid JSON after seeding, the secrets themselves contain invalid JSON syntax, `cd.yml` fails the deploy immediately rather than mounting a broken config into the container. `cd.yml` also extracts the password portion of `CORE_BE_SED_CONFIG_PG_WRITE` and exports it as `POSTGRES_PASSWORD` before `./containers.sh up`, so the datastore container's own password and the app's connection password always come from the same secret. It does the same for `CORE_BE_SED_CONFIG_RD`, extracting the part after `password=` and exporting it as `REDIS_PASSWORD` (see ADR 019). To rotate the Postgres password, it must actually be changed inside the running database (`ALTER USER core_be WITH PASSWORD '...'`), then both `CORE_BE_SED_CONFIG_PG_WRITE` and `CORE_BE_SED_CONFIG_PG_READ` updated to match, `POSTGRES_PASSWORD` only takes effect the first time a Postgres data directory is initialized, changing the secret alone does not change an already-initialized database's password. Redis's password can just be changed live with `redis-cli CONFIG SET requirepass ...`, but that alone does not persist across a container recreation, `REDIS_PASSWORD` also needs updating to match.
 
 <br>
 
@@ -69,22 +64,22 @@ The `CORE_BE_SED_*` secrets are read whenever `CORE_BE_CONFIG_PATH` does not exi
    - checks that `PROXY_CONF_D_PATH` (the shared reverse proxy's `conf.d` folder) exists, and fails the deploy immediately if it does not
    - pulls the latest `main-stable`
    - brings up this service's own datastore containers (`./containers.sh up`)
-   - if `CORE_BE_CONFIG_PATH` does not exist yet, or its contents are not valid JSON, (re)creates it from `config/config.json.template` and seeds `jwtSecret`, `postgres.write`, `postgres.read`, `redis`, and `corsAllowedOrigins` from the `CORE_BE_SED_*` secrets
-   - fails the deploy immediately if the config is still not valid JSON after reseeding
+   - regenerates `CORE_BE_CONFIG_PATH` from `config/config.json.template` every single deploy, seeding `jwtSecret`, `postgres.write`, `postgres.read`, `redis`, and `corsAllowedOrigins` from the `CORE_BE_SED_*` secrets
+   - fails the deploy immediately if the config is not valid JSON after seeding
    - checks that `corsAllowedOrigins` in that config includes the production Core FE origin (`https://vsngrp-fec.prothegee.dev`), and fails the deploy immediately if it does not
    - builds the image with `--build-arg GIT_SHA=$(git rev-parse --short HEAD)`
    - stops and replaces the running app container
    - copies this service's own `nginx/vsngrp-bec.conf` into `PROXY_CONF_D_PATH` and reloads the `vsngrp-reverse-proxy` container
    - runs `verify-deploy.sh`
 
-The config file is never baked into the image. It is mounted read-only from the path in `CORE_BE_CONFIG_PATH` at container start. The first deploy creates and seeds it automatically, every deploy after that just reuses the existing file, unless it is not valid JSON, in which case `cd.yml` recreates and reseeds it from the current secrets instead of deploying a broken config.
+The config file is never baked into the image. It is mounted read-only from the path in `CORE_BE_CONFIG_PATH` at container start. Every deploy regenerates it fresh from the current secrets, it is never hand-edited or preserved across deploys, the secrets are the only source of truth.
 
 <br>
 
 ## Verifying a deploy manually
 
 ```
-./verify-deploy.sh
+./verify-deploy.sh "" /path/to/config.json
 ```
 
-This checks the TLS certificate is valid, `GET /health` reports the expected `version` and `gitSha`, and the CORS allowlist includes the production Core FE origin. It cannot confirm that ports `9001` and the datastore ports are actually unreachable from outside the instance, that check only means something run from an external machine and stays a manual step.
+This checks the TLS certificate is valid, `GET /health` reports the expected `version` and `gitSha`, the CORS allowlist includes the production Core FE origin, and that the Postgres write, Postgres read, and Redis connection strings inside `config.json` actually authenticate against the live containers (see ADR 020), not just that the file is valid JSON. It cannot confirm that ports `9001` and the datastore ports are actually unreachable from outside the instance, that check only means something run from an external machine and stays a manual step.
