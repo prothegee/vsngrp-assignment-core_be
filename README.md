@@ -1,5 +1,8 @@
 # Core BE
 
+[![ci](https://github.com/prothegee/vsngrp-assignment-core_be/actions/workflows/ci.yml/badge.svg)](https://github.com/prothegee/vsngrp-assignment-core_be/actions/workflows/ci.yml)
+[![cd](https://github.com/prothegee/vsngrp-assignment-core_be/actions/workflows/cd.yml/badge.svg)](https://github.com/prothegee/vsngrp-assignment-core_be/actions/workflows/cd.yml)
+
 Core BE is the account service for the chat-bot product. It owns account signup, signin, signout, and session refresh over a REST API. It issues the JWT that the other services trust and never talks to the chat model directly, that is Core BE WS's job.
 
 <br>
