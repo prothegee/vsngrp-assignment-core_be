@@ -57,6 +57,14 @@ jobs:
             export REDIS_PASSWORD=$(printf '%s' "$CORE_BE_SED_CONFIG_RD" | sed -n 's/.*password=//p')
             ./containers.sh up
 
+            docker run --rm \
+              --network vsngrp-core-be_default \
+              -v "$(pwd)":/src \
+              -w /src \
+              -e MIGRATIONS_CONNECTION_STRING="$CORE_BE_SED_CONFIG_PG_WRITE" \
+              mcr.microsoft.com/dotnet/sdk:10.0 \
+              sh -c "dotnet tool restore && dotnet restore src && dotnet ef database update --project src"
+
             CONFIG_PATH="${{ secrets.CORE_BE_CONFIG_PATH }}"
 
             config_is_valid_json() {
