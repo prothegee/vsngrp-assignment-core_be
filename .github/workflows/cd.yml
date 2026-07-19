@@ -26,13 +26,15 @@ jobs:
         uses: appleboy/ssh-action@v1
         env:
           CORE_BE_SED_CONFIG_JWT_SECRET: ${{ secrets.CORE_BE_SED_CONFIG_JWT_SECRET }}
-          CORE_BE_SED_CONFIG_PG_PASSWORD: ${{ secrets.CORE_BE_SED_CONFIG_PG_WRITE }}
+          CORE_BE_SED_CONFIG_PG_WRITE: ${{ secrets.CORE_BE_SED_CONFIG_PG_WRITE }}
+          CORE_BE_SED_CONFIG_PG_READ: ${{ secrets.CORE_BE_SED_CONFIG_PG_READ }}
+          CORE_BE_SED_CONFIG_RD: ${{ secrets.CORE_BE_SED_CONFIG_RD }}
           CORE_BE_SED_ALLOWED_ORIGINS: ${{ secrets.CORE_BE_SED_ALLOWED_ORIGINS }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_SSH_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: CORE_BE_SED_CONFIG_JWT_SECRET,CORE_BE_SED_CONFIG_PG_PASSWORD,CORE_BE_SED_ALLOWED_ORIGINS
+          envs: CORE_BE_SED_CONFIG_JWT_SECRET,CORE_BE_SED_CONFIG_PG_WRITE,CORE_BE_SED_CONFIG_PG_READ,CORE_BE_SED_CONFIG_RD,CORE_BE_SED_ALLOWED_ORIGINS
           script: |
             set -euo pipefail
             if [ ! -d "${{ secrets.PROXY_CONF_D_PATH }}" ]; then
@@ -51,7 +53,8 @@ jobs:
             git checkout main-stable
             git reset --hard origin/main-stable
 
-            export POSTGRES_PASSWORD="$CORE_BE_SED_CONFIG_PG_PASSWORD"
+            export POSTGRES_PASSWORD=$(printf '%s' "$CORE_BE_SED_CONFIG_PG_WRITE" | sed -n 's/.*Password=//p')
+            export REDIS_PASSWORD=$(printf '%s' "$CORE_BE_SED_CONFIG_RD" | sed -n 's/.*password=//p')
             ./containers.sh up
 
             CONFIG_PATH="${{ secrets.CORE_BE_CONFIG_PATH }}"
@@ -65,14 +68,10 @@ jobs:
               mkdir -p "$(dirname "$CONFIG_PATH")"
               cp config/config.json.template "$CONFIG_PATH"
 
-              PG_WRITE_CONN="Host=vsngrp-core-be-postgres-primary;Port=5432;Database=vsngrp_core_be;Username=core_be;Password=$CORE_BE_SED_CONFIG_PG_PASSWORD"
-              PG_READ_CONN="Host=vsngrp-core-be-postgres-replica;Port=5432;Database=vsngrp_core_be;Username=core_be;Password=$CORE_BE_SED_CONFIG_PG_PASSWORD"
-              RD_CONN="vsngrp-core-be-redis:6379"
-
               sed -i "s|\"jwtSecret\": \"CHANGE_THIS\"|\"jwtSecret\": \"$CORE_BE_SED_CONFIG_JWT_SECRET\"|" "$CONFIG_PATH"
-              sed -i "0,/\"connectionString\": \"CHANGE_THIS\"/{s|\"connectionString\": \"CHANGE_THIS\"|\"connectionString\": \"$PG_WRITE_CONN\"|}" "$CONFIG_PATH"
-              sed -i "0,/\"connectionString\": \"CHANGE_THIS\"/{s|\"connectionString\": \"CHANGE_THIS\"|\"connectionString\": \"$PG_READ_CONN\"|}" "$CONFIG_PATH"
-              sed -i "0,/\"connectionString\": \"CHANGE_THIS\"/{s|\"connectionString\": \"CHANGE_THIS\"|\"connectionString\": \"$RD_CONN\"|}" "$CONFIG_PATH"
+              sed -i "0,/\"connectionString\": \"CHANGE_THIS\"/{s|\"connectionString\": \"CHANGE_THIS\"|\"connectionString\": \"$CORE_BE_SED_CONFIG_PG_WRITE\"|}" "$CONFIG_PATH"
+              sed -i "0,/\"connectionString\": \"CHANGE_THIS\"/{s|\"connectionString\": \"CHANGE_THIS\"|\"connectionString\": \"$CORE_BE_SED_CONFIG_PG_READ\"|}" "$CONFIG_PATH"
+              sed -i "0,/\"connectionString\": \"CHANGE_THIS\"/{s|\"connectionString\": \"CHANGE_THIS\"|\"connectionString\": \"$CORE_BE_SED_CONFIG_RD\"|}" "$CONFIG_PATH"
               sed -i "s|\"corsAllowedOrigins\": \[.*\]|\"corsAllowedOrigins\": $CORE_BE_SED_ALLOWED_ORIGINS|" "$CONFIG_PATH"
             }
 
@@ -104,11 +103,14 @@ jobs:
 
       - name: verify deploy
         uses: appleboy/ssh-action@v1
+        env:
+          CORE_BE_CONFIG_PATH: ${{ secrets.CORE_BE_CONFIG_PATH }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_SSH_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
+          envs: CORE_BE_CONFIG_PATH
           script: |
             set -euo pipefail
             cd ${{ secrets.CORE_BE_DEPLOY_PATH }}
-            ./verify-deploy.sh
+            ./verify-deploy.sh "" "$CORE_BE_CONFIG_PATH"
