@@ -29,7 +29,7 @@ The EC2 security group only opens `22` (SSH), `80`, and `443`. Everything else, 
 1. Clone this repository to the server, on the `main-stable` branch.
 2. No manual `config.json` step needed, `cd.yml` creates it from `config/config.json.template` on the first deploy and seeds it from the `CORE_BE_SED_*` secrets below (see GitHub Actions secrets and Deploy flow).
 3. No manual datastore step needed either, `cd.yml` runs `./containers.sh up` on every deploy, which brings up Postgres primary, Postgres replica, and Redis if they are not already running, and fails the deploy immediately if any of them do not stay running afterward.
-4. Apply migrations against the primary.
+4. No manual migration step needed, `cd.yml` runs `dotnet ef database update` automatically on every deploy (see ADR 021).
 5. Confirm the shared reverse proxy (`vsngrp-reverse-proxy`) is already up and its certificate for `vsngrp-bec.prothegee.dev` already issued, this is separate, shared infra provisioned once, see `tasks.md` Deployment infrastructure, not a per-service step. From here on, this service's own server block (`nginx/vsngrp-bec.conf`, committed in this repo) deploys into it automatically on every `cd.yml` run, no manual nginx or certbot step needed per service.
 
 <br>
@@ -64,6 +64,7 @@ The host in every Postgres/Redis connection string must be the container name fr
    - checks that `PROXY_CONF_D_PATH` (the shared reverse proxy's `conf.d` folder) exists, and fails the deploy immediately if it does not
    - pulls the latest `main-stable`
    - brings up this service's own datastore containers (`./containers.sh up`)
+   - applies EF Core migrations against the primary, unconditionally, every deploy (see ADR 021)
    - regenerates `CORE_BE_CONFIG_PATH` from `config/config.json.template` every single deploy, seeding `jwtSecret`, `postgres.write`, `postgres.read`, `redis`, and `corsAllowedOrigins` from the `CORE_BE_SED_*` secrets
    - fails the deploy immediately if the config is not valid JSON after seeding
    - checks that `corsAllowedOrigins` in that config includes the production Core FE origin (`https://vsngrp-fec.prothegee.dev`), and fails the deploy immediately if it does not
